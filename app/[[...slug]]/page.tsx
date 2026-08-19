@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { authUserToAppUser, supabase } from "../../lib/supabase";
+import { authErrorMessage, authUserToAppUser, supabase } from "../../lib/supabase";
 
 type Role = "admin" | "student" | "lecturer";
 type AccountStatus = "pending" | "approved" | "rejected";
@@ -179,7 +179,7 @@ function StatCard({ label, value, icon, accent = false }: { label: string; value
   return <Card className={accent ? "stat-card accent" : "stat-card"}><div className="stat-head"><span>{label}</span><Icon name={icon} /></div><strong>{value}</strong></Card>;
 }
 
-function Login({ demoMode, onLogin }: { demoMode: boolean; onLogin: (user: User) => void }) {
+function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [view, setView] = useState<"signin" | "create">("signin");
   const [role, setRole] = useState<Role>("student");
   const [username, setUsername] = useState("");
@@ -204,11 +204,7 @@ function Login({ demoMode, onLogin }: { demoMode: boolean; onLogin: (user: User)
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!demoMode) {
-      if (!supabase) {
-        setError("Supabase is not configured. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local.");
-        return;
-      }
+    {
       setError("");
       setSuccess("");
       if (view === "create") {
@@ -226,7 +222,7 @@ function Login({ demoMode, onLogin }: { demoMode: boolean; onLogin: (user: User)
           options: { data: { name: name.trim(), username: username.trim(), role, department: department.trim(), status: "pending", verified: false } },
         });
         if (signUpError) {
-          setError(signUpError.message);
+          setError(authErrorMessage(signUpError.message, "signup"));
           return;
         }
         if (data.user && data.session) {
@@ -240,51 +236,12 @@ function Login({ demoMode, onLogin }: { demoMode: boolean; onLogin: (user: User)
       }
       const { data, error: signInError } = await supabase.auth.signInWithPassword({ email: username.trim(), password });
       if (signInError || !data.user) {
-        setError(signInError?.message ?? "Unable to sign in.");
+        setError(authErrorMessage(signInError?.message ?? "Unable to sign in.", "signin"));
         return;
       }
       onLogin(authUserToAppUser(data.user));
       return;
     }
-    if (view === "create") {
-      if (!name.trim() || !email.trim() || !username.trim() || !password.trim() || !department.trim()) {
-        setError("Complete all fields to submit your account request.");
-        return;
-      }
-      const existing = allPreviewUsers().some((item) => item.username.toLowerCase() === username.trim().toLowerCase());
-      if (existing) {
-        setError("That username is already in use.");
-        return;
-      }
-      const autoAccept = window.localStorage.getItem(AUTO_ACCEPT_KEY) === "true";
-      const request: AccountRequest = {
-        id: `request-${Date.now()}`,
-        name: name.trim(),
-        username: username.trim(),
-        password,
-        email: email.trim(),
-        role,
-        department: department.trim(),
-        status: autoAccept ? "approved" : "pending",
-        verified: autoAccept,
-        createdAt: "Just now",
-      };
-      saveRequests([...getStoredRequests(), request]);
-      if (autoAccept) {
-        onLogin(requestToUser(request));
-      } else {
-        setSuccess("Your account request was sent to an administrator for verification.");
-        setView("signin");
-        setPassword("");
-      }
-      return;
-    }
-    const user = findPreviewUser(username.trim(), password, role);
-    if (!user) {
-      setError("Invalid username or password, or this account has been rejected.");
-      return;
-    }
-    onLogin(user);
   };
   return <main className="login-page">
     <div className="login-card">
@@ -295,14 +252,13 @@ function Login({ demoMode, onLogin }: { demoMode: boolean; onLogin: (user: User)
       <div className="role-tabs">{(["student", "lecturer", ...(view === "signin" ? ["admin" as Role] : [])] as Role[]).map((item) => <button type="button" className={role === item ? "active" : ""} key={item} onClick={() => chooseRole(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>
       <form onSubmit={submit} className="form-stack">
         {view === "create" && <><label>Full name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your full name" /></label><label>Email address<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="you@example.com" /></label><label>Department<input value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="Your department" /></label></>}
-        <label>{demoMode ? "Username" : "Email address"}<input value={username} onChange={(e) => setUsername(e.target.value)} type={demoMode ? "text" : "email"} placeholder={demoMode ? "Enter username" : "you@example.com"} /></label>
+        <label>Email address<input value={username} onChange={(e) => setUsername(e.target.value)} type="email" placeholder="you@example.com" /></label>
         <label>Password<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Enter password" /></label>
         {error && <p className="form-error">{error}</p>}
         {success && <p className="form-success">{success}</p>}
         <Button type="submit" className="full-width">{view === "signin" ? "Sign In" : "Submit account request"}</Button>
       </form>
-       {demoMode && <div className="demo-box"><strong>Demo accounts</strong><button type="button" onClick={() => fillDemoAccount("admin", "xeadmin", "XE2407")}>Use XE Admin demo</button><button type="button" onClick={() => fillDemoAccount("student", "stud.demo", "123")}>Use student demo</button><button type="button" onClick={() => fillDemoAccount("lecturer", "lect.demo", "123")}>Use lecturer demo</button></div>}
-      <p className="login-footnote">{demoMode ? "You are in the isolated demo environment. Demo changes stay in this browser." : "Your account is secured by Supabase Auth."}</p>
+      <p className="login-footnote">Your account is secured by Supabase Auth.</p>
     </div>
   </main>;
 }
@@ -433,17 +389,10 @@ function Library() {
 export default function Page() {
   const pathname = usePathname();
   const router = useRouter();
-  const isDemo = pathname === "/demo" || pathname.startsWith("/demo/");
-  const basePath = isDemo ? "/demo" : "";
-  const loginPath = `${basePath}/login`;
-  const storageKey = isDemo ? "xcellearn_demo_user" : "xcellearn_live_user";
+  const basePath = "";
+  const loginPath = "/login";
   const [user, setUser] = useState<User | null>(null);
   useEffect(() => {
-    if (isDemo) {
-      setUser(getStoredUser(storageKey));
-      return;
-    }
-    if (!supabase) return;
     let mounted = true;
     supabase.auth.getUser().then(({ data }) => {
       if (mounted) setUser(data.user ? authUserToAppUser(data.user) : null);
@@ -455,14 +404,14 @@ export default function Page() {
       mounted = false;
       subscription.subscription.unsubscribe();
     };
-  }, [isDemo, storageKey]);
+  }, []);
   useEffect(() => {
-    if (user && (pathname === "/" || pathname === "/login" || pathname === "/demo" || pathname === "/demo/login")) router.replace(`${basePath}/${user.role}/dashboard`);
+    if (user && (pathname === "/" || pathname === "/login")) router.replace(`${basePath}/${user.role}/dashboard`);
     if (!user && pathname !== loginPath) router.replace(loginPath);
   }, [user, pathname, router, basePath, loginPath]);
-  if (!user) return <Login demoMode={isDemo} onLogin={(nextUser) => { if (isDemo) window.localStorage.setItem(storageKey, nextUser.id); setUser(nextUser); router.push(`${basePath}/${nextUser.role}/dashboard`); }} />;
+  if (!user) return <Login onLogin={(nextUser) => { setUser(nextUser); router.push(`${basePath}/${nextUser.role}/dashboard`); }} />;
   const parts = pathname.split("/").filter(Boolean);
-  const routeParts = isDemo ? parts.slice(1) : parts;
+  const routeParts = parts;
   const role = (routeParts[0] as Role) || user.role;
   const section = routeParts[1] || "dashboard";
   let page: React.ReactNode;
@@ -474,5 +423,5 @@ export default function Page() {
   else if (section === "library") page = <Library />;
   else if (section === "submissions") page = <AssignmentsPage role="lecturer" user={user} />;
   else page = <PageHeading title="Page not found" description="This XcelLearn page does not exist." />;
-  return <Shell user={user} basePath={basePath} onLogout={async () => { if (isDemo) window.localStorage.removeItem(storageKey); else await supabase?.auth.signOut(); setUser(null); router.push(loginPath); }}>{page}</Shell>;
+  return <Shell user={user} basePath={basePath} onLogout={async () => { await supabase.auth.signOut(); setUser(null); router.push(loginPath); }}>{page}</Shell>;
 }
